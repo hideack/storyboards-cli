@@ -12,9 +12,10 @@ export function renderPresentation(
   theme: Theme,
   themeDir: string,
   title: string,
-  liveReload = false
+  liveReload = false,
+  customCss = ''
 ): RenderedOutput {
-  const css = buildCSS(theme.tokens);
+  const css = buildCSS(theme.tokens, customCss);
   const js = buildJS();
   const slidesHtml = slides
     .map((slide, i) => renderSlide(slide, theme, themeDir, i))
@@ -201,7 +202,7 @@ ${innerHtml}
   </div>\n`;
 }
 
-function buildCSS(tokens: ThemeTokens): string {
+function buildCSS(tokens: ThemeTokens, customCss = ''): string {
   return `/* storyboards-cli generated styles */
 :root {
   --font-family: ${tokens.fontFamily};
@@ -424,6 +425,7 @@ html, body {
   pointer-events: none;
   opacity: 0.6;
 }
+${customCss ? `\n/* theme custom css */\n${customCss}` : ''}
 `;
 }
 

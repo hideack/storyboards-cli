@@ -142,8 +142,13 @@ export async function runBuild(inputFile: string, options: BuildOptions): Promis
     slides.find((s) => s.type === 'title')?.title ||
     'Presentation';
 
+  const themeCssPath = path.join(themeInfo.directory, 'theme.css');
+  const customCss = fs.existsSync(themeCssPath)
+    ? fs.readFileSync(themeCssPath, 'utf-8')
+    : '';
+
   log.info('HTML を生成しています...');
-  const output = renderPresentation(slides, themeInfo.theme, themeInfo.directory, docTitle, options.liveReload);
+  const output = renderPresentation(slides, themeInfo.theme, themeInfo.directory, docTitle, options.liveReload, customCss);
 
   // --- ファイル書き出し ---
   fs.writeFileSync(path.join(outDir, 'index.html'), output.html, 'utf-8');
