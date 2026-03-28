@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { Resvg } from '@resvg/resvg-js';
 import { Theme, ThemeInfo, SVGImportOptions, PDFImportOptions } from './types';
 import { loadConfig } from './config';
 import { log } from '../utils/log';
@@ -94,18 +95,14 @@ export async function importSVGTheme(options: SVGImportOptions): Promise<void> {
 
   log.info('SVG ファイルをコピーしました');
 
-  // SVGからbase64 PNGを抽出してPNGファイルとして保存
+  // SVG全体をPNGにレンダリングして背景画像として保存
   log.info('SVG からバックグラウンド画像を生成しています...');
-  const titleBgPng = extractPngFromSvg(options.titleSvg, 0);
-  const titleLogoPng = extractPngFromSvg(options.titleSvg, 1);
-  const sectionBgPng = extractPngFromSvg(options.sectionSvg, 0);
-  const contentBgPng = extractPngFromSvg(options.contentSvg, 0);
+  const titleBgPng = renderSvgToPng(options.titleSvg);
+  const sectionBgPng = renderSvgToPng(options.sectionSvg);
+  const contentBgPng = renderSvgToPng(options.contentSvg);
 
   if (titleBgPng) {
     fs.writeFileSync(path.join(themeDir, 'assets', 'title_bg.png'), titleBgPng);
-  }
-  if (titleLogoPng) {
-    fs.writeFileSync(path.join(themeDir, 'assets', 'logo.png'), titleLogoPng);
   }
   if (sectionBgPng) {
     fs.writeFileSync(path.join(themeDir, 'assets', 'section_bg.png'), sectionBgPng);
@@ -119,11 +116,6 @@ export async function importSVGTheme(options: SVGImportOptions): Promise<void> {
   const titleLayout = extractLayoutFromSVG(options.titleSvg, 'title');
   const sectionLayout = extractLayoutFromSVG(options.sectionSvg, 'section');
   const contentLayout = extractLayoutFromSVG(options.contentSvg, 'content');
-
-  // titleスライドのfixedElements (CONFIDENTIALバッジ)
-  const titleFixedElements = titleLogoPng
-    ? [{ type: 'image', src: 'assets/logo.png', x: 76.8, y: 2.7, w: 21.5, h: 6.8 }]
-    : [];
 
   const themeJson = {
     schemaVersion: 1,
@@ -151,7 +143,7 @@ export async function importSVGTheme(options: SVGImportOptions): Promise<void> {
       title: {
         background: titleBgPng ? 'assets/title_bg.png' : null,
         slots: titleLayout.slots,
-        fixedElements: titleFixedElements,
+        fixedElements: [],
       },
       section: {
         background: sectionBgPng ? 'assets/section_bg.png' : null,
@@ -263,21 +255,81 @@ export async function importPDFTheme(options: PDFImportOptions): Promise<string[
   return warnings;
 }
 
-// SVG内のbase64 PNGを抽出してPNGバイナリを返す
-function extractPngFromSvg(svgPath: string, imageIndex = 0): Buffer | null {
+// SVG全体をPNGにレンダリングして返す（テキスト要素は除去して背景デザインのみ）
+function renderSvgToPng(svgPath: string): Buffer | null {
   try {
-    const content = fs.readFileSync(svgPath, 'utf-8');
-    const pattern = /data:image\/png;base64,([A-Za-z0-9+/=]+)/g;
-    const matches: string[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(content)) !== null) {
-      matches.push(match[1]);
-    }
-    if (matches.length <= imageIndex) return null;
-    return Buffer.from(matches[imageIndex], 'base64');
+    const svgContent = stripContentFromSvg(fs.readFileSync(svgPath, 'utf-8'));
+    const resvg = new Resvg(Buffer.from(svgContent), {
+      fitTo: { mode: 'width', value: 1600 },
+    });
+    const pngData = resvg.render();
+    return Buffer.from(pngData.asPng());
   } catch {
     return null;
   }
+}
+
+// SVGからテンプレートのプレースホルダー文字を除去する（背景デザインのみ残す）
+//
+// Google スライド等のSVGには以下のコンテンツ要素が混在する:
+//   - <text>要素: SVGテキスト
+//   - <path>要素(clipPath外): vectorize されたテキスト or 背景の白ボックス
+//   - <image>要素: 背景PNG / ロゴ / コンテンツPNG
+//
+// 保持するもの:
+//   - <clipPath> 内の <path>（構造的・クリッピング用）
+//   - fill="#ffffff" の <path>（白背景・白ボックス）
+//   - fill-opacity="0.0" の <path>（不可視のレイアウトマーカー）
+//   - ty ≈ 0 の <image>（全画面背景PNG）
+//   - 0 < ty < svgH の <image>（viewBox内に配置されたロゴ等）
+//
+// 除去するもの:
+//   - <text>要素
+//   - fill が白・透明以外の <path>（vectorize されたテキスト）
+//   - ty ≥ svgH の <image> を含む <g>（viewBox外に配置されたバリアント画像等）
+function stripContentFromSvg(svgContent: string): string {
+  // viewBox高を取得
+  const viewBoxMatch = svgContent.match(/viewBox="[^"]*?\s+([\d.]+)\s+([\d.]+)"/);
+  const svgH = viewBoxMatch ? parseFloat(viewBoxMatch[2]) : 540;
+
+  // <text>要素を除去
+  let result = svgContent.replace(/<text\b[^>]*>[\s\S]*?<\/text>/g, '');
+
+  // <clipPath> ブロックを一時退避して path の処理対象から外す
+  const clipPathBlocks: string[] = [];
+  result = result.replace(/<clipPath\b[\s\S]*?<\/clipPath>/g, (m) => {
+    clipPathBlocks.push(m);
+    return `__CLIPPATH_${clipPathBlocks.length - 1}__`;
+  });
+
+  // clipPath外の <path> で白・透明以外のfillを持つものを除去
+  result = result.replace(/<path\b[^>]*\/>/g, (match) => {
+    const fillMatch = match.match(/\bfill\s*=\s*"([^"]*)"/);
+    const fill = fillMatch ? fillMatch[1].toLowerCase() : '';
+    const isWhite = fill === '#ffffff' || fill === 'white';
+    const isTransparent = match.includes('fill-opacity="0.0"') || fill === 'none' || fill === 'transparent';
+    if (isWhite || isTransparent) return match;
+    return '';
+  });
+
+  // <clipPath> を復元
+  result = result.replace(/__CLIPPATH_(\d+)__/g, (_, i) => clipPathBlocks[parseInt(i)]);
+
+  // viewBox外（ty ≥ svgH）に配置された <image> を含む <g> ブロックを除去
+  result = result.replace(
+    /<g\s[^>]*transform\s*=\s*"matrix\(([^)]+)\)"[^>]*>([\s\S]*?)<\/g>/g,
+    (match, matrixArgs, content) => {
+      if (!content.includes('<image')) return match;
+      const parts = matrixArgs.trim().split(/[\s,]+/);
+      if (parts.length < 6) return match;
+      const ty = parseFloat(parts[5]);
+      // viewBox外（ty ≥ svgH）は除去
+      if (ty >= svgH) return '';
+      return match;
+    }
+  );
+
+  return result;
 }
 
 interface ExtractedLayout {
