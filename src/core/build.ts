@@ -58,6 +58,15 @@ export async function runBuild(inputFile: string, options: BuildOptions): Promis
     log.info('AI visual 生成モードを有効化しました');
   }
 
+  // globalFontScale をスライド個別設定のないスライドに適用
+  if (doc.globalFontScale !== undefined) {
+    for (const slide of doc.slides) {
+      if (slide.fontScale === undefined) {
+        slide.fontScale = doc.globalFontScale;
+      }
+    }
+  }
+
   const slides = doc.slides;
   let slideNum = 1;
   for (const slide of slides) {

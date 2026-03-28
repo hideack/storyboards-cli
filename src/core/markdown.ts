@@ -6,9 +6,14 @@ export function parseMarkdown(content: string): ParsedDocument {
 
   const slides = parseSlides(body);
 
+  const globalFontScale = frontmatter['fontSize'] !== undefined
+    ? parseFontScale(String(frontmatter['fontSize']))
+    : undefined;
+
   return {
     frontmatter: frontmatter as Record<string, unknown>,
     slides,
+    globalFontScale,
   };
 }
 
@@ -70,7 +75,7 @@ function parseSlideBlock(block: string, h1Count: number): Slide | null {
   }
 
   if (firstLine.startsWith('## ')) {
-    const { text: titleText, attrs } = extractAttrs(firstLine.slice(3).trim());
+    const { text: titleText, attrs, fontScale } = extractAttrs(firstLine.slice(3).trim());
     const restLines = lines.slice(1);
     const { eyebrow, body, visual } = extractContentParts(restLines);
     return {
@@ -81,6 +86,7 @@ function parseSlideBlock(block: string, h1Count: number): Slide | null {
       visual,
       textAlign: attrs.includes('center') ? 'center' : undefined,
       textFill: attrs.includes('fill') ? true : undefined,
+      fontScale,
     };
   }
 
@@ -159,12 +165,29 @@ function extractContentParts(lines: string[]): {
   };
 }
 
-function extractAttrs(raw: string): { text: string; attrs: string[] } {
+function extractAttrs(raw: string): { text: string; attrs: string[]; fontScale?: number } {
   const match = raw.match(/\{([^}]*)\}\s*$/);
   if (!match) return { text: raw, attrs: [] };
   const text = raw.slice(0, match.index).trim();
-  const attrs = match[1].trim().split(/\s+/).filter(Boolean);
-  return { text, attrs };
+  const parts = match[1].trim().split(/\s+/).filter(Boolean);
+
+  let fontScale: number | undefined;
+  const attrs: string[] = [];
+  for (const part of parts) {
+    if (part.startsWith('size=')) {
+      fontScale = parseFontScale(part.slice(5));
+    } else {
+      attrs.push(part);
+    }
+  }
+  return { text, attrs, fontScale };
+}
+
+function parseFontScale(value: string): number {
+  const named: Record<string, number> = { small: 0.8, large: 1.25, xlarge: 1.5 };
+  if (named[value] !== undefined) return named[value];
+  const n = parseFloat(value);
+  return isNaN(n) ? 1.0 : Math.min(Math.max(n, 0.5), 3.0);
 }
 
 function resolveVisualType(type: VisualType, prompt: string): VisualType {

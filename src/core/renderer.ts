@@ -133,6 +133,7 @@ function renderSlide(slide: Slide, theme: Theme, themeDir: string, index: number
       const bodyExtra: Record<string, string> = {};
       if (slide.textAlign === 'center') bodyExtra['style'] = 'text-align:center;';
       if (slide.textFill) bodyExtra['data-fill'] = 'true';
+      if (slide.fontScale !== undefined && slide.fontScale !== 1) bodyExtra['data-scale'] = String(slide.fontScale);
       content += renderSlot('slide-body', bodyHtml, effectiveBodySlot, bodyExtra);
     }
     if (slide.pageNumber !== undefined && pageNumSlot) {
@@ -434,15 +435,23 @@ function buildJS(): string {
   const slides = document.querySelectorAll('.slide');
   let current = 0;
 
+  function getFontScale(el) {
+    var s = parseFloat(el.dataset.scale);
+    return isNaN(s) ? 1.0 : s;
+  }
+
   // スライドボディのフォントサイズを文量に合わせて調整する
   function fitBodyText(slide) {
     var body = slide.querySelector('.slide-body');
     if (!body) return;
     body.style.fontSize = '';
-    var base = parseFloat(window.getComputedStyle(body).fontSize);
+    var cssBase = parseFloat(window.getComputedStyle(body).fontSize);
+    var scale = getFontScale(body);
+    var base = cssBase * scale;
+    body.style.fontSize = base + 'px';
     if (body.dataset.fill === 'true') {
       // fill モード: できる限り大きく表示
-      var size = base * 2.5;
+      var size = cssBase * 2.5;
       body.style.fontSize = size + 'px';
       while (body.scrollHeight > body.clientHeight + 2 && size > base) {
         size -= 2;
@@ -450,12 +459,11 @@ function buildJS(): string {
       }
     } else {
       // 通常モード: オーバーフロー時のみ縮小
-      var minSize = base * 0.55;
-      var step = 0;
-      while (body.scrollHeight > body.clientHeight + 2 && base > minSize && step < 20) {
+      // scale>=1 のときは cssBase を下限にしてスケール効果を保つ
+      var minSize = scale >= 1 ? cssBase : cssBase * scale * 0.6;
+      while (body.scrollHeight > body.clientHeight + 2 && base > minSize) {
         base -= 1;
         body.style.fontSize = base + 'px';
-        step++;
       }
     }
   }
@@ -467,28 +475,48 @@ function buildJS(): string {
     var table = body.querySelector('table');
     if (!table) return;
 
+    // 1. すべてリセット
+    body.style.fontSize = '';
+    table.style.fontSize = '';
     table.style.height = '';
-    var bodyH = body.clientHeight;
-    var otherH = 0;
-    for (var i = 0; i < body.children.length; i++) {
-      var el = body.children[i];
-      if (el !== table) otherH += el.offsetHeight;
-    }
-    var targetH = Math.max(bodyH - otherH, table.offsetHeight);
-    table.style.height = targetH + 'px';
+    table.querySelectorAll('tr').forEach(function(tr) { tr.style.height = ''; });
 
-    // 行の高さを均等分配 (tbody の行のみ)
+    var cssBase = parseFloat(window.getComputedStyle(body).fontSize);
+    var scale = getFontScale(body);
+
+    // 2. body 本文にスケールを適用し、テーブルの実際の top 位置から availH を算出
+    //    offsetHeight はマージンを含まないため getBoundingClientRect で計測する
+    body.style.fontSize = (cssBase * scale) + 'px';
+    var bodyH = body.clientHeight;
+    var bodyRect = body.getBoundingClientRect();
+    var tableRect = table.getBoundingClientRect();
+    var tableTop = tableRect.top - bodyRect.top;
+    var availH = bodyH - tableTop - 2;
+
+    // 3. テーブルのフォントサイズを設定し、自然な高さが availH に収まるまで縮小
+    //    <table>/<tr> の height は min-height 相当のため、先にフォントを確定する
+    var thead = table.querySelector('thead');
+    var fontSize = cssBase * scale;
+    table.style.fontSize = fontSize + 'px';
+    while (table.offsetHeight > availH && fontSize > 12) {
+      fontSize -= 1;
+      table.style.fontSize = fontSize + 'px';
+    }
+
+    // 4. 行を均等分配して availH いっぱいに拡張
+    table.style.height = availH + 'px';
     var rows = table.querySelectorAll('tbody tr');
     if (rows.length === 0) return;
-    var thead = table.querySelector('thead');
     var theadH = thead ? thead.offsetHeight : 0;
-    var rowH = Math.floor((targetH - theadH) / rows.length);
+    var rowH = Math.floor((availH - theadH) / rows.length);
     rows.forEach(function(tr) { tr.style.height = rowH + 'px'; });
 
-    // 行の高さに比例したフォントサイズを設定 (行高の約38%、上下限あり)
-    var fontSize = Math.min(Math.max(Math.floor(rowH * 0.38), 14), 32);
-    table.style.fontSize = fontSize + 'px';
-    if (thead) thead.style.fontSize = fontSize + 'px';
+    // 丸め誤差・border によるオーバーフローを末尾行で補正
+    var overflow = table.offsetHeight - availH;
+    if (overflow > 0 && rows.length > 0) {
+      var lastRow = rows[rows.length - 1];
+      lastRow.style.height = Math.max(rowH - overflow, 16) + 'px';
+    }
   }
 
   function showSlide(index) {
