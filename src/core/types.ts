@@ -105,11 +105,13 @@ export interface Slide {
   pageNumber?: number;
   textAlign?: 'center' | 'left';
   textFill?: boolean;
+  fontScale?: number;
 }
 
 export interface ParsedDocument {
   frontmatter: Record<string, unknown>;
   slides: Slide[];
+  globalFontScale?: number;
 }
 
 // ===== Build =====
