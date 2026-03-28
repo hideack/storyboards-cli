@@ -1,0 +1,9 @@
+node_modules/
+dist/
+output_test/
+*.js.map
+.DS_Store
+.playwright-mcp/
+plan.md
+DESIGN_PROCESS.md
+inputs/

@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "name": "simple",
+  "version": "0.1.0",
+  "kind": "builtin-theme",
+  "source": {
+    "type": "builtin",
+    "fidelity": "high"
+  },
+  "page": {
+    "width": 1600,
+    "height": 900,
+    "aspectRatio": "16:9"
+  },
+  "tokens": {
+    "fontFamily": "Arial, 'Hiragino Sans', 'Yu Gothic', sans-serif",
+    "textColor": "#111111",
+    "mutedColor": "#666666",
+    "accentColor": "#2255aa",
+    "backgroundColor": "#ffffff",
+    "borderRadius": 12
+  },
+  "layouts": {
+    "title": {
+      "background": null,
+      "slots": {
+        "title": { "x": 10, "y": 18, "w": 80, "h": 20 },
+        "subtitle": { "x": 10, "y": 42, "w": 80, "h": 14 }
+      },
+      "fixedElements": []
+    },
+    "section": {
+      "background": null,
+      "slots": {
+        "title": { "x": 8, "y": 18, "w": 84, "h": 40 },
+        "pageNumber": { "x": 4, "y": 90, "w": 8, "h": 6 }
+      },
+      "fixedElements": []
+    },
+    "content": {
+      "background": null,
+      "slots": {
+        "eyebrow": { "x": 8, "y": 6, "w": 70, "h": 6 },
+        "title": { "x": 8, "y": 14, "w": 84, "h": 10 },
+        "body": { "x": 8, "y": 28, "w": 84, "h": 42 },
+        "pageNumber": { "x": 4, "y": 90, "w": 8, "h": 6 }
+      },
+      "visualRegion": {
+        "x": 8,
+        "y": 58,
+        "w": 84,
+        "h": 24
+      },
+      "fixedElements": []
+    }
+  }
+}

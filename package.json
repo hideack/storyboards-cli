@@ -1,0 +1,30 @@
+{
+  "name": "storyboards-cli",
+  "version": "0.1.0",
+  "description": "Markdown から HTML プレゼンテーションを生成する CLI ツール",
+  "main": "dist/index.js",
+  "bin": {
+    "storyboards": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "commander": "^11.0.0",
+    "gray-matter": "^4.0.3",
+    "marked": "^9.0.0",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^18.0.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "MIT"
+}
