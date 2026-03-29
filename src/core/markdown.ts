@@ -122,7 +122,13 @@ function extractContentParts(lines: string[]): {
   for (; i < lines.length; i++) {
     const line = lines[i];
 
-    // ブロック形式 :::visual type=xxx
+    // ブロック形式 :::visual type=xxx または :::mermaid
+    if (line.startsWith(':::mermaid')) {
+      inVisualBlock = true;
+      visualBlockType = 'mermaid';
+      continue;
+    }
+
     if (line.startsWith(':::visual')) {
       inVisualBlock = true;
       const typeMatch = line.match(/type=(\w+)/);
