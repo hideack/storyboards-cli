@@ -122,11 +122,16 @@ function renderSlide(slide: Slide, theme: Theme, themeDir: string, index: number
 
     // visual があるときは body を縮小して visual 領域を直下から拡張する
     const hasVisual = !!(slide.visual && layout.visualRegion);
-    const effectiveBodySlot = (hasVisual && bodySlot)
+    const hasBody = !!(slide.body);
+    const effectiveBodySlot = (hasVisual && hasBody && bodySlot)
       ? { ...bodySlot, h: Math.min(bodySlot.h, 22) }
       : bodySlot;
+    // body コンテンツがない場合は body スロットの上端から visual を開始する
+    const compactBodyForVisual = (hasVisual && !hasBody && bodySlot)
+      ? { ...bodySlot, h: 0 }
+      : effectiveBodySlot;
     const effectiveVisualRegion = (hasVisual && bodySlot && layout.visualRegion)
-      ? computeExpandedVisualRegion(effectiveBodySlot!, layout.visualRegion, pageNumSlot?.y)
+      ? computeExpandedVisualRegion(compactBodyForVisual!, layout.visualRegion, pageNumSlot?.y)
       : layout.visualRegion;
 
     if (slide.eyebrow && eyebrowSlot) {
