@@ -573,6 +573,9 @@ function buildJS(): string {
         fitBodyText(slides[index]);
       }
     }
+    var params = new URLSearchParams(location.search);
+    params.set('p', String(index + 1));
+    history.replaceState(null, '', '?' + params.toString());
   }
 
   function next() {
@@ -627,7 +630,10 @@ function buildJS(): string {
     }
   }, { passive: true });
 
-  showSlide(0);
+  var p = new URLSearchParams(location.search).get('p');
+  var initial = p ? Math.max(0, Math.min(parseInt(p, 10) - 1, slides.length - 1)) : 0;
+  current = initial;
+  showSlide(initial);
 })();
 `;
 }
