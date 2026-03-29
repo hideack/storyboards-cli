@@ -490,12 +490,26 @@ function buildJS(): string {
         body.style.fontSize = size + 'px';
       }
     } else {
-      // 通常モード: オーバーフロー時のみ縮小
-      // scale>=1 のときは cssBase を下限にしてスケール効果を保つ
-      var minSize = scale >= 1 ? cssBase : cssBase * scale * 0.6;
-      while (body.scrollHeight > body.clientHeight + 2 && base > minSize) {
-        base -= 1;
-        body.style.fontSize = base + 'px';
+      // overflow:hidden の子要素は getBoundingClientRect がクリップされた値を返す場合がある。
+      // 一時的に overflow:visible にして実際のコンテンツ高さを正確に計測する。
+      function bodyOverflows() {
+        body.style.overflow = 'visible';
+        var bodyBottom = body.getBoundingClientRect().bottom;
+        var kids = body.children;
+        var result = false;
+        for (var k = 0; k < kids.length; k++) {
+          if (kids[k].getBoundingClientRect().bottom > bodyBottom + 2) { result = true; break; }
+        }
+        body.style.overflow = 'hidden';
+        return result;
+      }
+      // CSS ベースより少し大きく始め、収まるまで縮小する
+      var targetSize = cssBase * 1.5;
+      var minSize = cssBase * 0.75;
+      body.style.fontSize = targetSize + 'px';
+      while (bodyOverflows() && targetSize > minSize) {
+        targetSize -= 1;
+        body.style.fontSize = targetSize + 'px';
       }
     }
   }
@@ -523,6 +537,20 @@ function buildJS(): string {
     var bodyRect = body.getBoundingClientRect();
     var tableRect = table.getBoundingClientRect();
     var tableTop = tableRect.top - bodyRect.top;
+
+    // テーブル後のコンテンツ（リスト・段落等）の高さを確認する
+    var afterTableH = 0;
+    var nextEl = table.nextElementSibling;
+    while (nextEl) {
+      afterTableH += nextEl.getBoundingClientRect().height;
+      var cs = window.getComputedStyle(nextEl);
+      afterTableH += (parseFloat(cs.marginTop) || 0) + (parseFloat(cs.marginBottom) || 0);
+      nextEl = nextEl.nextElementSibling;
+    }
+
+    // 後続コンテンツがある場合はフォント縮小・行拡張せず fitBodyText に委ねる
+    if (afterTableH > 0) return;
+
     var availH = bodyH - tableTop - 2;
 
     // 3. テーブルのフォントサイズを設定し、自然な高さが availH に収まるまで縮小
@@ -569,6 +597,11 @@ function buildJS(): string {
       var hasTable = !!slides[index].querySelector('.slide-body table');
       if (hasTable) {
         fitTable(slides[index]);
+        // テーブル後にコンテンツがある場合はフォントサイズも調整する
+        var bodyEl = slides[index].querySelector('.slide-body');
+        if (bodyEl && bodyEl.querySelector('table + *')) {
+          fitBodyText(slides[index]);
+        }
       } else {
         fitBodyText(slides[index]);
       }
