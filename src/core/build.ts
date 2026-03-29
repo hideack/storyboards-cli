@@ -95,6 +95,13 @@ export async function runBuild(inputFile: string, options: BuildOptions): Promis
         })()
       : rawVisualRegion;
 
+    // mermaid タイプは AI 不要: コードを直接 _renderedContent に設定
+    if (slide.visual.type === 'mermaid') {
+      slide.visual._renderedContent = `<div class="mermaid">\n${slide.visual.prompt}\n</div>`;
+      if (slide.type !== 'title') slideNum++;
+      continue;
+    }
+
     if (useAI) {
       log.info(`Visual 生成中: スライド "${slide.title}"`);
 

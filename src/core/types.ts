@@ -84,7 +84,7 @@ export interface ThemeInfo {
 // ===== Markdown / Slides =====
 export type SlideType = 'title' | 'section' | 'content';
 
-export type VisualType = 'auto' | 'diagram' | 'flow' | 'compare' | 'chart';
+export type VisualType = 'auto' | 'diagram' | 'flow' | 'compare' | 'chart' | 'mermaid';
 
 export interface VisualNode {
   type: VisualType;

@@ -1,6 +1,18 @@
 import { marked } from 'marked';
 import { Slide, Theme, ThemeTokens } from './types';
 
+// mermaid コードフェンスをブラウザで描画するためのカスタムレンダラー
+marked.use({
+  renderer: {
+    code(code: string, lang: string | undefined) {
+      if (lang === 'mermaid') {
+        return `<div class="mermaid">\n${code}\n</div>\n`;
+      }
+      return false;
+    },
+  },
+});
+
 export interface RenderedOutput {
   html: string;
   css: string;
@@ -21,12 +33,12 @@ export function renderPresentation(
     .map((slide, i) => renderSlide(slide, theme, themeDir, i))
     .join('\n');
 
-  const html = buildHTML(title, slidesHtml, liveReload);
+  const html = buildHTML(title, slidesHtml, theme.tokens, liveReload);
 
   return { html, css, js };
 }
 
-function buildHTML(title: string, slidesHtml: string, liveReload = false): string {
+function buildHTML(title: string, slidesHtml: string, tokens: ThemeTokens, liveReload = false): string {
   const liveReloadScript = liveReload ? `
 <script>
 (function() {
@@ -58,6 +70,8 @@ ${slidesHtml}
   </div>
 </div>
 <div class="nav-hint">← → キーでスライドを操作</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>mermaid.initialize(${buildMermaidConfig(tokens)});</script>
 <script src="app.js"></script>${liveReloadScript}
 </body>
 </html>`;
@@ -414,6 +428,22 @@ html, body {
   text-align: center;
 }
 
+/* mermaid */
+.slide-visual .mermaid,
+.slide-body .mermaid {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.slide-visual .mermaid svg,
+.slide-body .mermaid svg {
+  max-width: 100%;
+  max-height: 100%;
+}
+
 /* nav hint */
 .nav-hint {
   position: fixed;
@@ -521,10 +551,21 @@ function buildJS(): string {
     }
   }
 
+  // mermaid: display:none のままでは描画できないため、スライドが active になってから run する
+  function renderMermaidInSlide(slide) {
+    if (typeof mermaid === 'undefined') return;
+    var nodes = Array.from(slide.querySelectorAll('.mermaid')).filter(function(el) {
+      return !el.getAttribute('data-processed');
+    });
+    if (nodes.length === 0) return;
+    mermaid.run({ nodes: nodes });
+  }
+
   function showSlide(index) {
     slides.forEach(function(s) { s.classList.remove('active'); });
     if (slides[index]) {
       slides[index].classList.add('active');
+      renderMermaidInSlide(slides[index]);
       var hasTable = !!slides[index].querySelector('.slide-body table');
       if (hasTable) {
         fitTable(slides[index]);
@@ -619,6 +660,61 @@ function fitSvgToContainer(svgContent: string): string {
       return `<svg${cleaned} width="100%" height="100%" preserveAspectRatio="xMidYMid meet">`;
     }
   );
+}
+
+/**
+ * テーマトークンから mermaid.initialize() に渡す設定オブジェクトの JSON 文字列を生成する。
+ * base テーマ + themeVariables でスライドの色調に合わせる。
+ */
+function buildMermaidConfig(tokens: ThemeTokens): string {
+  const nodeBg = lightenHex(tokens.accentColor, 0.85);
+  const nodeBorder = tokens.accentColor;
+  const nodeText = tokens.textColor;
+  const lineColor = tokens.accentColor;
+  const edgeLabelBg = lightenHex(tokens.backgroundColor, 0.5) || tokens.backgroundColor;
+
+  const config = {
+    startOnLoad: false,
+    theme: 'base',
+    themeVariables: {
+      fontFamily: tokens.fontFamily,
+      primaryColor: nodeBg,
+      primaryTextColor: nodeText,
+      primaryBorderColor: nodeBorder,
+      lineColor: lineColor,
+      secondaryColor: lightenHex(tokens.accentColor, 0.92),
+      tertiaryColor: lightenHex(tokens.backgroundColor, 0.3) || tokens.backgroundColor,
+      background: tokens.backgroundColor,
+      mainBkg: nodeBg,
+      nodeBorder: nodeBorder,
+      clusterBkg: lightenHex(tokens.accentColor, 0.95),
+      titleColor: nodeText,
+      edgeLabelBackground: edgeLabelBg,
+      actorBkg: nodeBg,
+      actorBorder: nodeBorder,
+      actorTextColor: nodeText,
+      actorLineColor: lineColor,
+      labelColor: nodeText,
+      signalColor: lineColor,
+      signalTextColor: nodeText,
+    },
+  };
+  return JSON.stringify(config);
+}
+
+/**
+ * #rrggbb または #rgb 形式の色を白方向に amount (0〜1) だけ薄める。
+ * パースできない場合は空文字を返す（呼び出し側でフォールバックすること）。
+ */
+function lightenHex(hex: string, amount: number): string {
+  // #rgb → #rrggbb に正規化
+  const normalized = hex.trim().replace(/^#([0-9a-f])([0-9a-f])([0-9a-f])$/i, '#$1$1$2$2$3$3');
+  const m = normalized.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
+  if (!m) return '';
+  const r = Math.round(parseInt(m[1], 16) + (255 - parseInt(m[1], 16)) * amount);
+  const g = Math.round(parseInt(m[2], 16) + (255 - parseInt(m[2], 16)) * amount);
+  const b = Math.round(parseInt(m[3], 16) + (255 - parseInt(m[3], 16)) * amount);
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
 
 export function escapeHtml(str: string): string {
