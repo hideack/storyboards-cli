@@ -10,11 +10,12 @@ import {
 import { log } from '../utils/log';
 
 const CACHE_DIR = path.join(os.homedir(), '.cache', 'storyboards-cli', 'visuals');
-const AI_TIMEOUT_MS = 300000;
+const AI_TIMEOUT_MS_DEFAULT = 300000;
 
 export async function generateVisual(
   input: VisualGenerationInput,
-  useAI: boolean
+  useAI: boolean,
+  timeoutMs: number = AI_TIMEOUT_MS_DEFAULT
 ): Promise<VisualGenerationResult> {
   if (!useAI) {
     return { success: false, error: 'AI モードが無効です' };
@@ -30,7 +31,7 @@ export async function generateVisual(
   const prompt = buildPrompt(input);
 
   try {
-    const result = await callClaudeCode(prompt);
+    const result = await callClaudeCode(prompt, timeoutMs);
 
     if (!result.success || !result.content) {
       return { success: false, error: result.error };
@@ -106,7 +107,7 @@ viewBox="0 0 ${svgW} ${svgH}" で固定してください。
 - SVG のみ出力`;
 }
 
-async function callClaudeCode(prompt: string): Promise<{ success: boolean; content?: string; error?: string }> {
+async function callClaudeCode(prompt: string, timeoutMs: number): Promise<{ success: boolean; content?: string; error?: string }> {
   return new Promise((resolve) => {
     const claudeArgs = ['--print', '--output-format', 'text'];
 
@@ -121,10 +122,10 @@ async function callClaudeCode(prompt: string): Promise<{ success: boolean; conte
     let stdout = '';
     let stderr = '';
 
-    const timer = setTimeout(() => {
+    const timer = timeoutMs > 0 ? setTimeout(() => {
       child.kill('SIGTERM');
-      resolve({ success: false, error: `タイムアウト (${AI_TIMEOUT_MS}ms)` });
-    }, AI_TIMEOUT_MS);
+      resolve({ success: false, error: `タイムアウト (${timeoutMs}ms)` });
+    }, timeoutMs) : null;
 
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
@@ -135,7 +136,7 @@ async function callClaudeCode(prompt: string): Promise<{ success: boolean; conte
     });
 
     child.on('close', (code) => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       const content = stdout.trim();
 
       if (code !== 0) {
@@ -160,7 +161,7 @@ async function callClaudeCode(prompt: string): Promise<{ success: boolean; conte
     });
 
     child.on('error', (err) => {
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
       resolve({ success: false, error: `claude コマンドの起動に失敗しました: ${err.message}` });
     });
   });

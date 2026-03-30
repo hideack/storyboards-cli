@@ -121,6 +121,7 @@ export interface BuildOptions {
   open: boolean;
   strict: boolean;
   ai?: string;
+  aiTimeout?: number;  // AI visual タイムアウト秒数 (0 = 無制限)
   liveReload?: boolean;
 }
 
