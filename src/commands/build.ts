@@ -16,6 +16,7 @@ export function buildCommand(): Command {
     .option('--open', 'ビルド後にブラウザで開く', false)
     .option('--strict', 'warning を error 扱いにする', false)
     .option('--ai <mode>', 'AI 補助モード (例: visual)')
+    .option('--ai-timeout <seconds>', 'AI visual タイムアウト秒数 (0 = 無制限、デフォルト: 300)')
     .option('--watch', 'ファイルを監視して変更時に自動リビルドする', false)
     .action(async (file: string, opts: {
       theme?: string;
@@ -23,10 +24,12 @@ export function buildCommand(): Command {
       open: boolean;
       strict: boolean;
       ai?: string;
+      aiTimeout?: string;
       watch: boolean;
     }) => {
+      const aiTimeout = opts.aiTimeout !== undefined ? parseInt(opts.aiTimeout, 10) : undefined;
       if (opts.watch) {
-        await runWatch(file, opts);
+        await runWatch(file, { ...opts, aiTimeout });
       } else {
         const buildOptions: BuildOptions = {
           theme: opts.theme,
@@ -34,6 +37,7 @@ export function buildCommand(): Command {
           open: opts.open,
           strict: opts.strict,
           ai: opts.ai,
+          aiTimeout,
         };
 
         const result = await runBuild(file, buildOptions);
@@ -50,7 +54,7 @@ export function buildCommand(): Command {
 
 async function runWatch(
   file: string,
-  opts: { theme?: string; out: string; open: boolean; strict: boolean; ai?: string }
+  opts: { theme?: string; out: string; open: boolean; strict: boolean; ai?: string; aiTimeout?: number }
 ): Promise<void> {
   const absFile = path.resolve(file);
 
@@ -60,6 +64,7 @@ async function runWatch(
     open: opts.open,   // 初回のみ open
     strict: false,     // watch 中は strict 無効
     ai: opts.ai,       // 初回はオプション通り
+    aiTimeout: opts.aiTimeout,
     liveReload: true,
   };
 

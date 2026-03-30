@@ -115,7 +115,8 @@ export async function runBuild(inputFile: string, options: BuildOptions): Promis
         preferredFormat: 'svg',
       };
 
-      const result = await generateVisual(genInput, true);
+      const aiTimeoutMs = options.aiTimeout !== undefined ? options.aiTimeout * 1000 : undefined;
+      const result = await generateVisual(genInput, true, aiTimeoutMs);
 
       if (result.success && result.content) {
         const assetName = `slide-${String(slideNum).padStart(2, '0')}-visual.${result.format ?? 'svg'}`;
