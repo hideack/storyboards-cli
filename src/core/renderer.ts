@@ -130,9 +130,26 @@ function renderSlide(slide: Slide, theme: Theme, themeDir: string, index: number
     const compactBodyForVisual = (hasVisual && !hasBody && bodySlot)
       ? { ...bodySlot, h: 0 }
       : effectiveBodySlot;
-    const effectiveVisualRegion = (hasVisual && bodySlot && layout.visualRegion)
+    let effectiveVisualRegion = (hasVisual && bodySlot && layout.visualRegion)
       ? computeExpandedVisualRegion(compactBodyForVisual!, layout.visualRegion, pageNumSlot?.y)
       : layout.visualRegion;
+
+    // SVG の viewBox アスペクト比に合わせて visual 領域の高さと位置を最適化する
+    // w は「スライド幅に対する%」、h は「スライド高さに対する%」なので 16:9 で換算が必要
+    if (effectiveVisualRegion && slide.visual?._renderedContent) {
+      const vbMatch = slide.visual._renderedContent.match(/viewBox="0 0 (\d+\.?\d*)\s+(\d+\.?\d*)"/);
+      if (vbMatch) {
+        const svgW = parseFloat(vbMatch[1]);
+        const svgH = parseFloat(vbMatch[2]);
+        // w(% of slide width) → h(% of slide height): × (16/9)
+        const naturalH = effectiveVisualRegion.w * (svgH / svgW) * (16 / 9);
+        if (naturalH < effectiveVisualRegion.h) {
+          // 自然な高さがコンテナより小さい場合、高さを縮めて上下中央に配置する
+          const centeredY = effectiveVisualRegion.y + (effectiveVisualRegion.h - naturalH) / 2;
+          effectiveVisualRegion = { ...effectiveVisualRegion, y: centeredY, h: naturalH };
+        }
+      }
+    }
 
     if (slide.eyebrow && eyebrowSlot) {
       content += renderSlot(
