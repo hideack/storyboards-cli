@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { Resvg } from '@resvg/resvg-js';
 import { Theme, ThemeInfo, SVGImportOptions, PDFImportOptions } from './types';
 import { loadConfig } from './config';
 import { log } from '../utils/log';
@@ -94,18 +95,14 @@ export async function importSVGTheme(options: SVGImportOptions): Promise<void> {
 
   log.info('SVG ファイルをコピーしました');
 
-  // SVGからbase64 PNGを抽出してPNGファイルとして保存
+  // SVG全体をPNGにレンダリングして背景画像として保存
   log.info('SVG からバックグラウンド画像を生成しています...');
-  const titleBgPng = extractPngFromSvg(options.titleSvg, 0);
-  const titleLogoPng = extractPngFromSvg(options.titleSvg, 1);
-  const sectionBgPng = extractPngFromSvg(options.sectionSvg, 0);
-  const contentBgPng = extractPngFromSvg(options.contentSvg, 0);
+  const titleBgPng = renderSvgToPng(options.titleSvg);
+  const sectionBgPng = renderSvgToPng(options.sectionSvg);
+  const contentBgPng = renderSvgToPng(options.contentSvg);
 
   if (titleBgPng) {
     fs.writeFileSync(path.join(themeDir, 'assets', 'title_bg.png'), titleBgPng);
-  }
-  if (titleLogoPng) {
-    fs.writeFileSync(path.join(themeDir, 'assets', 'logo.png'), titleLogoPng);
   }
   if (sectionBgPng) {
     fs.writeFileSync(path.join(themeDir, 'assets', 'section_bg.png'), sectionBgPng);
@@ -119,11 +116,6 @@ export async function importSVGTheme(options: SVGImportOptions): Promise<void> {
   const titleLayout = extractLayoutFromSVG(options.titleSvg, 'title');
   const sectionLayout = extractLayoutFromSVG(options.sectionSvg, 'section');
   const contentLayout = extractLayoutFromSVG(options.contentSvg, 'content');
-
-  // titleスライドのfixedElements (CONFIDENTIALバッジ)
-  const titleFixedElements = titleLogoPng
-    ? [{ type: 'image', src: 'assets/logo.png', x: 76.8, y: 2.7, w: 21.5, h: 6.8 }]
-    : [];
 
   const themeJson = {
     schemaVersion: 1,
@@ -151,7 +143,7 @@ export async function importSVGTheme(options: SVGImportOptions): Promise<void> {
       title: {
         background: titleBgPng ? 'assets/title_bg.png' : null,
         slots: titleLayout.slots,
-        fixedElements: titleFixedElements,
+        fixedElements: [],
       },
       section: {
         background: sectionBgPng ? 'assets/section_bg.png' : null,
@@ -263,21 +255,81 @@ export async function importPDFTheme(options: PDFImportOptions): Promise<string[
   return warnings;
 }
 
-// SVG内のbase64 PNGを抽出してPNGバイナリを返す
-function extractPngFromSvg(svgPath: string, imageIndex = 0): Buffer | null {
+// SVG全体をPNGにレンダリングして返す（テキスト要素は除去して背景デザインのみ）
+function renderSvgToPng(svgPath: string): Buffer | null {
   try {
-    const content = fs.readFileSync(svgPath, 'utf-8');
-    const pattern = /data:image\/png;base64,([A-Za-z0-9+/=]+)/g;
-    const matches: string[] = [];
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(content)) !== null) {
-      matches.push(match[1]);
-    }
-    if (matches.length <= imageIndex) return null;
-    return Buffer.from(matches[imageIndex], 'base64');
+    const svgContent = stripContentFromSvg(fs.readFileSync(svgPath, 'utf-8'));
+    const resvg = new Resvg(Buffer.from(svgContent), {
+      fitTo: { mode: 'width', value: 1600 },
+    });
+    const pngData = resvg.render();
+    return Buffer.from(pngData.asPng());
   } catch {
     return null;
   }
+}
+
+// SVGからテンプレートのプレースホルダー文字を除去する（背景デザインのみ残す）
+//
+// Google スライド等のSVGには以下のコンテンツ要素が混在する:
+//   - <text>要素: SVGテキスト
+//   - <path>要素(clipPath外): vectorize されたテキスト or 背景の白ボックス
+//   - <image>要素: 背景PNG / ロゴ / コンテンツPNG
+//
+// 保持するもの:
+//   - <clipPath> 内の <path>（構造的・クリッピング用）
+//   - fill="#ffffff" の <path>（白背景・白ボックス）
+//   - fill-opacity="0.0" の <path>（不可視のレイアウトマーカー）
+//   - ty ≈ 0 の <image>（全画面背景PNG）
+//   - 0 < ty < svgH の <image>（viewBox内に配置されたロゴ等）
+//
+// 除去するもの:
+//   - <text>要素
+//   - fill が白・透明以外の <path>（vectorize されたテキスト）
+//   - ty ≥ svgH の <image> を含む <g>（viewBox外に配置されたバリアント画像等）
+function stripContentFromSvg(svgContent: string): string {
+  // viewBox高を取得
+  const viewBoxMatch = svgContent.match(/viewBox="[^"]*?\s+([\d.]+)\s+([\d.]+)"/);
+  const svgH = viewBoxMatch ? parseFloat(viewBoxMatch[2]) : 540;
+
+  // <text>要素を除去
+  let result = svgContent.replace(/<text\b[^>]*>[\s\S]*?<\/text>/g, '');
+
+  // <clipPath> ブロックを一時退避して path の処理対象から外す
+  const clipPathBlocks: string[] = [];
+  result = result.replace(/<clipPath\b[\s\S]*?<\/clipPath>/g, (m) => {
+    clipPathBlocks.push(m);
+    return `__CLIPPATH_${clipPathBlocks.length - 1}__`;
+  });
+
+  // clipPath外の <path> で白・透明以外のfillを持つものを除去
+  result = result.replace(/<path\b[^>]*\/>/g, (match) => {
+    const fillMatch = match.match(/\bfill\s*=\s*"([^"]*)"/);
+    const fill = fillMatch ? fillMatch[1].toLowerCase() : '';
+    const isWhite = fill === '#ffffff' || fill === 'white';
+    const isTransparent = match.includes('fill-opacity="0.0"') || fill === 'none' || fill === 'transparent';
+    if (isWhite || isTransparent) return match;
+    return '';
+  });
+
+  // <clipPath> を復元
+  result = result.replace(/__CLIPPATH_(\d+)__/g, (_, i) => clipPathBlocks[parseInt(i)]);
+
+  // viewBox外（ty ≥ svgH）に配置された <image> を含む <g> ブロックを除去
+  result = result.replace(
+    /<g\s[^>]*transform\s*=\s*"matrix\(([^)]+)\)"[^>]*>([\s\S]*?)<\/g>/g,
+    (match, matrixArgs, content) => {
+      if (!content.includes('<image')) return match;
+      const parts = matrixArgs.trim().split(/[\s,]+/);
+      if (parts.length < 6) return match;
+      const ty = parseFloat(parts[5]);
+      // viewBox外（ty ≥ svgH）は除去
+      if (ty >= svgH) return '';
+      return match;
+    }
+  );
+
+  return result;
 }
 
 interface ExtractedLayout {
@@ -285,11 +337,18 @@ interface ExtractedLayout {
   visualRegion?: { x: number; y: number; w: number; h: number };
 }
 
-// SVG からテキスト領域を推定する（fill-opacity="0.0" のパスから）
+// SVG からテキスト領域を推定する（透明パス → テキスト要素 → デフォルトのフォールバックチェーン）
 function extractLayoutFromSVG(svgPath: string, layoutType: 'title' | 'section' | 'content'): ExtractedLayout {
   try {
     const content = fs.readFileSync(svgPath, 'utf-8');
-    const regions = extractTransparentRegions(content);
+
+    // まず透明パス方式を試みる（手動作成SVG向け）
+    let regions = extractTransparentRegions(content);
+
+    // 透明パスが見つからない場合はテキスト要素解析にフォールバック（Google スライド等向け）
+    if (regions.length === 0) {
+      regions = extractTextBasedRegions(content);
+    }
 
     if (layoutType === 'title') {
       return buildTitleLayout(regions);
@@ -308,6 +367,7 @@ interface Region {
   y: number;
   w: number;
   h: number;
+  fontSize?: number;
 }
 
 // fill-opacity="0.0" の path 要素から領域を抽出
@@ -355,11 +415,200 @@ function extractTransparentRegions(svgContent: string): Region[] {
   return regions;
 }
 
+// ---------- テキスト要素ベースの領域抽出（Google スライド等向け） ----------
+
+interface RawTextElement {
+  x: number;   // SVG座標系での絶対X
+  y: number;   // SVG座標系での絶対Y
+  fontSize: number;  // px換算
+  lineCount: number;
+}
+
+function parseFontSizeFromAttrs(styleAttr: string, fontSizeAttr: string): number {
+  // style="...font-size: Xpt/px..." を優先
+  if (styleAttr) {
+    const m = styleAttr.match(/font-size\s*:\s*([\d.]+)(pt|px)?/i);
+    if (m) {
+      const v = parseFloat(m[1]);
+      const unit = (m[2] || 'px').toLowerCase();
+      return unit === 'pt' ? Math.round(v * 1.333) : v;
+    }
+  }
+  // font-size="X" 属性
+  if (fontSizeAttr) {
+    const v = parseFloat(fontSizeAttr);
+    if (!isNaN(v) && v > 0) return v;
+  }
+  return 0;
+}
+
+function parseTranslateFromTransform(transform: string): [number, number] {
+  const m = transform.match(/translate\(\s*([\d.\-]+)[\s,]+([\d.\-]+)\s*\)/);
+  return m ? [parseFloat(m[1]), parseFloat(m[2])] : [0, 0];
+}
+
+// SVG を文字スキャンして <text> 要素の絶対座標とフォントサイズを収集する
+function collectTextElements(svgContent: string): RawTextElement[] {
+  const results: RawTextElement[] = [];
+  // translate の累積スタック [tx, ty]
+  const stack: Array<[number, number]> = [[0, 0]];
+
+  let i = 0;
+  const len = svgContent.length;
+
+  while (i < len) {
+    // '<' を探す
+    if (svgContent[i] !== '<') { i++; continue; }
+
+    // タグ終端を探す（引用符内の '>' は無視）
+    let j = i + 1;
+    let inQuote = false;
+    let quoteChar = '';
+    while (j < len) {
+      const c = svgContent[j];
+      if (inQuote) {
+        if (c === quoteChar) inQuote = false;
+      } else {
+        if (c === '"' || c === "'") { inQuote = true; quoteChar = c; }
+        else if (c === '>') break;
+      }
+      j++;
+    }
+    if (j >= len) break;
+
+    const tagStr = svgContent.slice(i, j + 1);
+    i = j + 1;
+
+    const isClosing = tagStr[1] === '/';
+    const isSelfClosing = tagStr[tagStr.length - 2] === '/';
+    const nameMatch = tagStr.match(/^<\/?([A-Za-z][A-Za-z0-9:]*)/);
+    if (!nameMatch) continue;
+
+    const tagName = nameMatch[1].toLowerCase();
+
+    if (tagName === 'g' && !isSelfClosing) {
+      if (isClosing) {
+        if (stack.length > 1) stack.pop();
+      } else {
+        const tAttr = tagStr.match(/transform\s*=\s*"([^"]*)"/);
+        const parent = stack[stack.length - 1];
+        if (tAttr) {
+          const [tx, ty] = parseTranslateFromTransform(tAttr[1]);
+          stack.push([parent[0] + tx, parent[1] + ty]);
+        } else {
+          stack.push([parent[0], parent[1]]);
+        }
+      }
+    } else if (tagName === 'text' && !isClosing && !isSelfClosing) {
+      // </text> までの内容を取得
+      const closeIdx = svgContent.indexOf('</text>', i);
+      const inner = closeIdx > i ? svgContent.slice(i, closeIdx) : '';
+      if (closeIdx > i) i = closeIdx + 7;
+
+      // テキスト内容が空なら無視
+      const textContent = inner.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+      if (!textContent) continue;
+
+      // フォントサイズ取得
+      const styleAttr = (tagStr.match(/style\s*=\s*"([^"]*)"/) || [])[1] || '';
+      const fontSizeAttr = (tagStr.match(/font-size\s*=\s*"([^"]*)"/) || [])[1] || '';
+      const fontSize = parseFontSizeFromAttrs(styleAttr, fontSizeAttr) || 16;
+
+      // 行数（tspan の数）
+      const tspanCount = (inner.match(/<tspan/g) || []).length;
+      const lineCount = Math.max(1, tspanCount);
+
+      // 絶対座標
+      const current = stack[stack.length - 1];
+      const xAttr = (tagStr.match(/\bx\s*=\s*"([\d.\-]+)"/) || [])[1];
+      const yAttr = (tagStr.match(/\by\s*=\s*"([\d.\-]+)"/) || [])[1];
+      const elemX = current[0] + (xAttr ? parseFloat(xAttr) : 0);
+      const elemY = current[1] + (yAttr ? parseFloat(yAttr) : 0);
+
+      // y座標が不明（0かつtransformもゼロ）なものは除外
+      if (elemY === 0 && current[1] === 0) continue;
+
+      results.push({ x: elemX, y: elemY, fontSize, lineCount });
+    }
+  }
+
+  return results;
+}
+
+// 近接するテキスト要素をクラスタリングして Region[] に変換
+function clusterTextElements(elements: RawTextElement[], svgW: number, svgH: number): Region[] {
+  if (elements.length === 0) return [];
+
+  // y昇順にソート
+  const sorted = [...elements].sort((a, b) => a.y - b.y);
+  const clusters: RawTextElement[][] = [];
+  let current: RawTextElement[] = [sorted[0]];
+
+  for (let i = 1; i < sorted.length; i++) {
+    const prev = current[current.length - 1];
+    const gap = sorted[i].y - (prev.y + prev.fontSize * prev.lineCount * 1.4);
+    // 前クラスタの末尾との縦ギャップが fontSize の1.5倍以内なら同一クラスタ
+    if (gap <= prev.fontSize * 1.5) {
+      current.push(sorted[i]);
+    } else {
+      clusters.push(current);
+      current = [sorted[i]];
+    }
+  }
+  clusters.push(current);
+
+  return clusters.map(cluster => {
+    const minX = Math.min(...cluster.map(e => e.x));
+    const minY = Math.min(...cluster.map(e => e.y));
+    const maxX = Math.max(...cluster.map(e => e.x + svgW * 0.85 - e.x)); // 右端を推定
+    const totalH = cluster.reduce((sum, e) => sum + e.fontSize * e.lineCount * 1.4, 0);
+    const dominantFontSize = Math.max(...cluster.map(e => e.fontSize));
+
+    // 幅は minX から 85% 地点まで（テキストボックスの典型的な幅）
+    const estimatedW = Math.min(svgW * 0.85, svgW - minX - svgW * 0.05);
+
+    return {
+      x: parseFloat(((minX / svgW) * 100).toFixed(1)),
+      y: parseFloat(((minY / svgH) * 100).toFixed(1)),
+      w: parseFloat(((estimatedW / svgW) * 100).toFixed(1)),
+      h: parseFloat(((totalH / svgH) * 100).toFixed(1)),
+      fontSize: dominantFontSize,
+    };
+  }).filter(r => r.w > 5 && r.h > 1);
+}
+
+// テキスト要素ベースの領域抽出エントリポイント
+function extractTextBasedRegions(svgContent: string): Region[] {
+  const viewBoxMatch = svgContent.match(/viewBox="([^"]+)"/);
+  let svgW = 960;
+  let svgH = 540;
+  if (viewBoxMatch) {
+    const parts = viewBoxMatch[1].split(/\s+/);
+    if (parts.length >= 4) {
+      svgW = parseFloat(parts[2]) || 960;
+      svgH = parseFloat(parts[3]) || 540;
+    }
+  }
+
+  const elements = collectTextElements(svgContent);
+  // フォントサイズが極端に小さいもの（装飾的テキスト）を除外
+  const meaningful = elements.filter(e => e.fontSize >= 8);
+  return clusterTextElements(meaningful, svgW, svgH);
+}
+
+// ---------- ここまでテキスト要素ベース ----------
+
 function buildTitleLayout(regions: Region[]): ExtractedLayout {
   // 小さい幅のリージョン (バッジ等) を除外して大きいテキスト領域だけを対象にする
   const textRegions = regions.filter(r => r.w > 30 && r.h > 5);
-  // y 昇順にソート
-  textRegions.sort((a, b) => a.y - b.y);
+
+  // fontSize 情報があれば大きい順（title → subtitle）、なければ y 昇順
+  const hasFontSize = textRegions.some(r => r.fontSize !== undefined);
+  if (hasFontSize) {
+    textRegions.sort((a, b) => (b.fontSize ?? 0) - (a.fontSize ?? 0));
+  } else {
+    textRegions.sort((a, b) => a.y - b.y);
+  }
 
   if (textRegions.length >= 2) {
     return {
@@ -403,8 +652,20 @@ function buildContentLayout(regions: Region[]): ExtractedLayout {
   // pageNumber 候補 (小さい幅・高さ) とテキスト領域を分離
   const pageNumberRegion = regions.find(r => r.w < 15 && r.h < 15 && r.y > 80);
   const textRegions = regions.filter(r => !(r.w < 15 && r.h < 15 && r.y > 80));
-  // y 昇順にソート
-  textRegions.sort((a, b) => a.y - b.y);
+
+  // fontSize 情報がある場合: title(最大) → eyebrow(2番目) → body(最小) で割り当て後、y昇順に並び替え
+  // fontSize 情報がない場合: y 昇順のまま
+  const hasFontSize = textRegions.some(r => r.fontSize !== undefined);
+  if (hasFontSize && textRegions.length >= 3) {
+    textRegions.sort((a, b) => (b.fontSize ?? 0) - (a.fontSize ?? 0));
+    // title=最大, eyebrow=2番目, body=3番目 を確定してから y 昇順に並べ直す
+    const [titleR, eyebrowR, bodyR] = textRegions;
+    const ordered = [titleR, eyebrowR, bodyR].sort((a, b) => a.y - b.y);
+    // 並び直した順で eyebrow/title/body を再マッピング
+    textRegions.splice(0, textRegions.length, ...ordered);
+  } else {
+    textRegions.sort((a, b) => a.y - b.y);
+  }
 
   const pageNumber = pageNumberRegion
     ? pageNumberRegion
